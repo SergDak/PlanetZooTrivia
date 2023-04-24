@@ -1,0 +1,9 @@
+This is a practice project in using Rvest and Shiny
+the purpose was to create a trivia game using available information from the game Planet Zoo
+
+for this the data was scraped from the Planet Zoo Wiki using Rvest,
+the data then was processed in R and a game application was created in Shiny
+
+the Shiny app can be viewed here:
+ https://srvddk.shinyapps.io/planetzootriviagame/ 
+(or locally using PlanetZooTriviaGame.Rmd)

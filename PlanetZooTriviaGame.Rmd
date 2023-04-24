@@ -1,0 +1,290 @@
+---
+title: "Planet Zoo Trivia"
+author: "Sergei Dakov"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r message=FALSE}
+library(tidyverse)
+```
+
+
+
+```{r message=FALSE}
+animal_table <- read_csv("ZooQuiz.csv")
+animal_table <- animal_table %>% select(!c(image_link,Availability,...1)) %>% rename(continent=continents,biome=biomes,region=regions,compatibility = compatible)
+```
+
+```{r}
+answer_list <- list()
+for (i in 2:ncol(animal_table)) {
+  current_value <- c()
+  for ( j in 1:nrow(animal_table)){
+    current_options <- pull(animal_table[j,i])
+    current_options <- str_split(current_options,",")[[1]]
+    current_options <- str_split(current_options,":")[[1]]
+    current_value <- c(current_value,current_options[!(current_options %in% current_value)])
+  }
+  current_value <- na.omit(current_value)
+  current_value <- list(current_value)
+  names(current_value) <- colnames(animal_table)[i]
+  answer_list <- c(answer_list,current_value)
+}
+```
+
+
+```{r}
+generate_question_tf <- function() {
+  subject <- animal_table %>% .[sample(1:nrow(.),1),] %>% select(where(~!is.na(.)))
+  subject_name <- subject %>% pull(Species)
+  topic <- subject %>% select(!Species) %>% .[1,sample(1:ncol(.),1)]
+  correct_answer <- topic %>% pull(.)
+  topic <- colnames(topic)
+  presented_answer  <- sample(answer_list[topic][[1]],1)
+  presented_answer <- sample(c(correct_answer,presented_answer),1)
+  return(c("subject" = subject_name,"topic" = topic,"correct" = correct_answer,"given" = presented_answer))
+}
+```
+
+
+```{r}
+generate_question_multi <- function() {
+  choice <- runif(1) #this value is used to select the format in which the question will appear
+  if (choice > 0.5) { #format: choose the correct animal that matches the trait in question
+    
+    subject <- sample(colnames(animal_table)[-1],1) #select the overall subject of the question
+    topic <- animal_table %>% select(all_of(subject)) %>% .[sample(1:nrow(.),1),1] %>% pull(.) #pull a specific topic for the question
+    if (is.na(topic)){ #some animals do not have full information, in this case a different question is generated
+      return(generate_question_multi())
+    }
+    # sometimes multiple values are present, the answer string is broken into multiple values
+    if (str_detect(topic,",")){
+      topic <- str_split(topic,",")[[1]]
+    }
+    #only one valueis selected for the question
+    topic <- sample(topic,1)
+    #the correct answer is selected among animals that match the trait
+    correct_answer <- animal_table %>% filter(grepl(topic,!!sym(subject))) %>% .[sample(1:nrow(.),1),1] %>% pull(.)
+    #three aditional answers are selected, while ensuring none of them match any of the correct traints (even those not selected as the one presented in the question)
+    presented_answer <- animal_table %>% filter(!(grepl(topic,!!sym(subject)))) %>% .[sample(1:nrow(.),3),1] %>% pull(.)
+  }
+  if (choice < 0.5) { #format: select the trait that matches the selected animal
+    #first, an animal is selected
+    subject <- animal_table %>% select(Species) %>% .[sample(1:nrow(.),1),1] %>% pull(.)
+    #then, a trait is selected, and the correct answer is set
+    topic <- sample(colnames(animal_table)[-1],1)
+    correct_answer <- animal_table %>% filter (Species==!!subject) %>%select(sym(topic)) %>% pull(.)
+    #similarly to the previous case, if the correct answer is missing, a different question is generated
+    if (is.na(correct_answer)){
+      return(generate_question_multi())
+    }
+    # for categories that have multiple values, select one specific value
+    if (str_detect(correct_answer,",")){
+    correct_answer <- str_split(correct_answer,",")[[1]]
+    }
+    if(any(str_detect(correct_answer,":"))){  
+    correct_answer <- str_split(correct_answer,":")[[1]]
+    }
+    # using the generated list of answers find all possible wrong answers
+    possible_answers <- answer_list[topic][[1]][which(!answer_list[topic][[1]] %in% correct_answer)]
+    # if there are not enough answers to populate the answer list fully, a new question is generated 
+    if (length(possible_answers)<3){
+      return(generate_question_multi()) 
+    }
+    # 3 wrond anseers are chosen
+    presented_answer <- sample(possible_answers,3)
+  }
+  #correct answer is narrowed down
+  if (length(correct_answer)>1){
+    correct_answer <- sample(correct_answer,1)
+  }
+  #presented answers are collected and randomized
+  presented_answer <- c(presented_answer,correct_answer)
+  shuffle <- sample(1:4,4)
+  presented_answer <- presented_answer[shuffle]
+  
+  if (any(is.na(presented_answer))) {
+    return(generate_question_multi())
+  }
+  return(c("subject" = subject, "topic" = topic,"correct" = correct_answer,"given" = presented_answer))
+}
+```
+
+
+```{r}
+generate_trivia <- function() {
+  question_type <-  runif(1)
+  if (question_type<0.5){ #generate a true or false question
+    question <- generate_question_tf()
+    question_text <- paste0("True or False: the ",question["subject"],"'s ",question["topic"]," is ",question["given"])
+    #arrange the correct answer to match the format
+    if (question["given"]==question["correct"]) { correct_answer<-"true"}
+    else { correct_answer<-"false"}
+    }
+  else { #generate multiple choice question
+    question <- generate_question_multi()
+    if (question["subject"]%in%colnames(animal_table)){#present the text of the questoin in the correct format
+      question_text <- paste0("Which of the following animals has the ",question["subject"]," of ",question["topic"],"?")
+    }
+    else{
+      question_text <- paste0("Which of the following is the correct ",question["topic"]," for ",question["subject"],"?")
+    }
+    #set the global correct answer
+     correct_answer <- question["correct"]
+     names(question) <- NULL
+  }
+  #render the question in the Shiny UI
+  output$question <- renderText(question_text)
+  if (question_type<0.5){
+    #clear the UI from a previous question
+    removeUI("#answers")
+    #add the UI for the new question
+    insertUI("#question","afterEnd",tags$div(id="answers",
+                                             tags$table(
+                                               tags$tr(
+                                                 tags$td(
+                                                   radioButtons("answer","",choices = lst("True" = "true", "False" = "false"))
+                                                 ),
+                                                 
+                                               ),
+                                               tags$tr(
+                                                 tags$td(
+                                                   actionButton("check_answer","submit")
+                                                 )
+                                               )
+                                             )
+                                             )
+             )
+  }
+  else{
+    #remove UI for old question
+    removeUI("#answers")
+    #add ui for new question
+    insertUI("#question","afterEnd",tags$div(id="answers",
+                                             tags$table(
+                                               tags$tr(
+                                                 tags$td(
+                                                   radioButtons("answer","",choices = question[4:7])
+                                               )
+                                               ),
+                                               tags$tr(
+                                                 tags$td(
+                                                   actionButton("check_answer","Submit")
+                                                 )
+                                               )
+                                             )
+                                          )
+             )
+
+  }
+  #the function returns the correct answer to the main game
+  return(correct_answer)
+}
+```
+
+
+
+```{r}
+#setting up the interface for the app
+fluidPage(
+  h1("welcome the the Planet Zoo trivia game",align="center"),
+  tags$div(
+  tags$table(
+    tags$tr(
+      tags$td(align="center",
+        textInput("player","player name")
+        ),
+      tags$tr(
+        tags$td(align="center",
+          numericInput("question_number","number of questions",10,min=1,max=100,width='100%')
+        )
+      ),
+      tags$tr(
+        tags$td(align="center",
+          checkboxInput("game_type","Marathon Mode",width = '150%')
+        )
+      )
+    ,align="center")
+  )
+  ,align="center"),
+  p(strong("Regular Mode:")," choose number of questions, try get as many of them correct as possible"),
+  p(strong("Marathon Mode:")," see how far you can go, game will continue until a mistake is made"),
+  br(),
+  tags$div(actionButton("launch","start game",align="center"),align="center"), # command button to start the game
+  textOutput("question"), #text field reserve for question
+  tags$table(align="center", 
+             tags$tr(
+               tags$td(
+                  textOutput("last_answer") #text field to contain response to previous answer
+                )
+              ),
+             tags$tr(
+               tags$td(
+                 textOutput("game_result") #text field to contain end game results
+               )
+             )
+  )
+  
+)
+```
+
+
+
+```{r}
+observeEvent(input$launch, { #Event for launching the game
+  #game parameters are set
+  score <<- 0 #player score in current game
+  game_length <<- input$question_number #max length of the game
+  game_turn <<- 1 #current game turn
+  marathon_mode <<-input$game_type # check if game is in marathon mode
+  streak <<- input$game_type # is correct answer streak still going
+  if (input$game_type){ #if marathon mode game length is not used
+    game_length <<- 0
+  }
+  correct_answer <<- generate_trivia() #generate question and correct answer
+  output$game_result <- renderText("") #reset game result text in case game was played before
+  output$last_answer <- renderText("")
+})
+
+#Event for checking answer when a selection is made
+observeEvent(input$check_answer,{ 
+  if ((streak)||(game_turn<game_length)){ #check that game is not over
+        game_turn <<- game_turn+1 #increase turn counter
+        given_answer <- input$answer #read selected answer
+        if (given_answer[[1]]==correct_answer) { #check answer
+          score <<- score+1 #increase score
+          output$last_answer <- renderText("correct!") #render result
+          correct_answer <<- generate_trivia() #generate next question
+        }
+        else { #render answer result, reveal correct answer
+          last_correct <- correct_answer 
+          output$last_answer <- renderText(paste0("wrong, the correct answer was: ",last_correct))
+          if (!marathon_mode) { #continue game in regular mode
+            correct_answer <<- generate_trivia()
+          }
+          else{ #break the streak and end the game
+            streak <<- FALSE
+            output$game_result <- renderText(paste0("Game over, ", input$player," your streak is ", score, " correct answers long"))
+            removeUI("#answers")
+            output$question <- renderText("")
+          }
+        }
+    }
+    else { #when regular game is over post result of game
+        output$game_result <- renderText(paste0("Game over, ",input$player," your score is ", score, " out of ", game_length))
+          removeUI("#answers")
+          output$question <- renderText("")
+      }
+})
+```
+
+
+
+
+
